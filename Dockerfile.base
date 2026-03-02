@@ -26,7 +26,9 @@ ARG INSTALL_NINJA=1.13.1-1       # or 0
 ARG INSTALL_BOOST=1
 ARG INSTALL_GTEST=1
 ARG INSTALL_BENCHMARK=1
-ARG INSTALL_CLI11=1
+
+# CLI11: 0 => skip; otherwise install that version from GitHub releases.
+ARG INSTALL_CLI11=2.6.2
 
 # ------------------------------------------------------------
 # Base deps
@@ -124,6 +126,21 @@ RUN apt-get update && \
     /usr/local/bin/install_apt_pkg libbenchmark-dev "${INSTALL_BENCHMARK}" && \
     /usr/local/bin/install_apt_pkg cli11-dev        "${INSTALL_CLI11}" && \
     rm -rf /var/lib/apt/lists/*
+
+# ------------------------------------------------------------
+# Install CLI11 (header-only) from GitHub releases (no build)
+# 0 => skip; else installs single-header distribution.
+# ------------------------------------------------------------
+RUN if [[ "${INSTALL_CLI11}" != "0" ]]; then \
+      v="${INSTALL_CLI11}"; \
+      tmp="$(mktemp -d)"; \
+      # Official single-header location in the CLI11 repo:
+      # We'll fetch from the tag to make it versioned.
+      curl -fsSL -o "${tmp}/CLI11.hpp" \
+        "https://raw.githubusercontent.com/CLIUtils/CLI11/v${v}/include/CLI/CLI.hpp"; \
+      install -D -m 0644 "${tmp}/CLI11.hpp" /usr/local/include/CLI/CLI.hpp; \
+      rm -rf "${tmp}"; \
+    fi
 
 # ------------------------------------------------------------
 # Configure defaults (cc/c++ + optional libc++)
