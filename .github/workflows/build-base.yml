@@ -13,14 +13,6 @@ env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}/toolchain
 
-  # Human-facing versions (image tags)
-  CLANG_VER: 18.1.8
-  GCC_VER: 14.3.0
-
-  # xPack release versions (download tags / asset names)
-  CLANG_XPACK: 18.1.8-1
-  GCC_XPACK: 14.3.0-1
-
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -28,13 +20,13 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # clang 18.1.8 with libc++ for x86 and arm (test only arm64 to keep it simple)
+          # clang 18.1.8 with libc++ for x86+arm (smoke test only arm64)
           - variant: clang-libcxx
             image_tag: clang-18.1.8-libcxx
             platforms_push: linux/amd64,linux/arm64
             platform_test: linux/arm64
             compiler_type: clang
-            compiler_version: ${{ env.CLANG_XPACK }}
+            compiler_xpack: 18.1.8-1
             use_libcxx: "1"
             smoke_mode: libcxx
 
@@ -44,7 +36,7 @@ jobs:
             platforms_push: linux/amd64
             platform_test: linux/amd64
             compiler_type: clang
-            compiler_version: ${{ env.CLANG_XPACK }}
+            compiler_xpack: 18.1.8-1
             use_libcxx: "0"
             smoke_mode: default
 
@@ -54,7 +46,7 @@ jobs:
             platforms_push: linux/amd64
             platform_test: linux/amd64
             compiler_type: gcc
-            compiler_version: ${{ env.GCC_XPACK }}
+            compiler_xpack: 14.3.0-1
             use_libcxx: "0"
             smoke_mode: default
 
@@ -83,10 +75,10 @@ jobs:
           file: ./Dockerfile.base
           platforms: ${{ matrix.platform_test }}
           load: true
-          tags: local/smoke:${{ matrix.image_tag }}-${{ matrix.platform_test }}
+          tags: local/smoke:${{ matrix.image_tag }}-${{ matrix.variant }}
           build-args: |
             COMPILER_TYPE=${{ matrix.compiler_type }}
-            COMPILER_VERSION=${{ matrix.compiler_version }}
+            COMPILER_VERSION=${{ matrix.compiler_xpack }}
             USE_LIBCXX=${{ matrix.use_libcxx }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
@@ -95,7 +87,7 @@ jobs:
       - name: Smoke test
         run: |
           set -euxo pipefail
-          img="local/smoke:${{ matrix.image_tag }}-${{ matrix.platform_test }}"
+          img="local/smoke:${{ matrix.image_tag }}-${{ matrix.variant }}"
           plat="${{ matrix.platform_test }}"
 
           if [[ "${{ matrix.smoke_mode }}" == "libcxx" ]]; then
@@ -111,7 +103,6 @@ jobs:
               int main(){ std::cout << "ok\n"; }
               EOF
 
-              # libc++ link test (xPack clang commonly uses compiler-rt + unwind)
               c++ -std=c++20 -O2 -stdlib=libc++ -rtlib=compiler-rt -lunwind /tmp/main.cpp -o /tmp/a.out
 
               mkdir -p /tmp/smoke && cd /tmp/smoke
@@ -154,7 +145,7 @@ jobs:
             '
           fi
 
-      # 3) Tag selection for push
+      # 3) Tags for push
       - name: Docker metadata
         id: meta
         uses: docker/metadata-action@v5
@@ -176,7 +167,7 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             COMPILER_TYPE=${{ matrix.compiler_type }}
-            COMPILER_VERSION=${{ matrix.compiler_version }}
+            COMPILER_VERSION=${{ matrix.compiler_xpack }}
             USE_LIBCXX=${{ matrix.use_libcxx }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
