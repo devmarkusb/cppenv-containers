@@ -141,17 +141,18 @@ ENV CC=cc \
 
 # If USE_LIBCXX=1, provide a CMake toolchain snippet + environment defaults.
 RUN if [[ "${COMPILER_TYPE}" == "clang" && "${USE_LIBCXX}" == "1" ]]; then \
-      mkdir -p /opt/toolchains; \
-      cat >/opt/toolchains/clang-libcxx.cmake <<'TC'
-set(CMAKE_C_COMPILER clang)
-set(CMAKE_CXX_COMPILER clang++)
-set(CMAKE_CXX_FLAGS_INIT "-stdlib=libc++")
-set(CMAKE_EXE_LINKER_FLAGS_INIT "-stdlib=libc++")
-TC
-      cat >/etc/profile.d/libcxx.sh <<'SH'
-export CXXFLAGS="${CXXFLAGS:-} -stdlib=libc++"
-export LDFLAGS="${LDFLAGS:-} -stdlib=libc++"
-SH
+      mkdir -p /opt/toolchains /etc/profile.d; \
+      printf '%s\n' \
+        'set(CMAKE_C_COMPILER clang)' \
+        'set(CMAKE_CXX_COMPILER clang++)' \
+        'set(CMAKE_CXX_FLAGS_INIT "-stdlib=libc++")' \
+        'set(CMAKE_EXE_LINKER_FLAGS_INIT "-stdlib=libc++")' \
+        > /opt/toolchains/clang-libcxx.cmake; \
+      printf '%s\n' \
+        'export CXXFLAGS="${CXXFLAGS:-} -stdlib=libc++"' \
+        'export LDFLAGS="${LDFLAGS:-} -stdlib=libc++"' \
+        > /etc/profile.d/libcxx.sh; \
+      chmod 0644 /opt/toolchains/clang-libcxx.cmake /etc/profile.d/libcxx.sh; \
     fi
 
 WORKDIR /work
