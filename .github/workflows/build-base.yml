@@ -1,0 +1,306 @@
+name: Build, Smoke Test & Push Toolchain Images (GHCR)
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}/toolchain
+
+  # Human-facing versions (used in image tags)
+  CLANG_VER: 18.1.8
+  GCC_VER: 14.3.0
+
+  # xPack release versions (used for downloads: v<...> and archive names)
+  CLANG_XPACK: 18.1.8-1
+  GCC_XPACK: 14.3.0-1
+
+jobs:
+  clang-libcxx:
+    name: clang ${{ env.CLANG_VER }} (libc++) - amd64+arm64
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build (amd64) and load locally
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile.base
+          platforms: linux/amd64
+          load: true
+          tags: local/smoke:clang-${{ env.CLANG_VER }}-libcxx-amd64
+          build-args: |
+            COMPILER_TYPE=clang
+            COMPILER_VERSION=${{ env.CLANG_XPACK }}
+            USE_LIBCXX=1
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke test (amd64)
+        run: |
+          docker run --rm --platform=linux/amd64 local/smoke:clang-${{ env.CLANG_VER }}-libcxx-amd64 bash -lc '
+            set -euxo pipefail
+            cc --version
+            c++ --version
+            cmake --version
+            ninja --version
+            cat >/tmp/main.cpp <<EOF
+            #include <iostream>
+            int main(){ std::cout << "ok\n"; }
+            EOF
+            c++ -std=c++20 -O2 -stdlib=libc++ -rtlib=compiler-rt -lunwind /tmp/main.cpp -o /tmp/a.out
+            mkdir -p /tmp/smoke && cd /tmp/smoke
+            cat >CMakeLists.txt <<EOF
+            cmake_minimum_required(VERSION 3.20)
+            project(smoke LANGUAGES CXX)
+            add_executable(smoke main.cpp)
+            target_compile_features(smoke PRIVATE cxx_std_20)
+            target_compile_options(smoke PRIVATE -stdlib=libc++)
+            target_link_options(smoke PRIVATE -stdlib=libc++ -rtlib=compiler-rt -lunwind)
+            EOF
+            cp /tmp/main.cpp main.cpp
+            cmake -S . -B build -G Ninja
+            cmake --build build -v
+          '
+
+      - name: Build (arm64) and load locally
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile.base
+          platforms: linux/arm64
+          load: true
+          tags: local/smoke:clang-${{ env.CLANG_VER }}-libcxx-arm64
+          build-args: |
+            COMPILER_TYPE=clang
+            COMPILER_VERSION=${{ env.CLANG_XPACK }}
+            USE_LIBCXX=1
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke test (arm64)
+        run: |
+          docker run --rm --platform=linux/arm64 local/smoke:clang-${{ env.CLANG_VER }}-libcxx-arm64 bash -lc '
+            set -euxo pipefail
+            cc --version
+            c++ --version
+            cmake --version
+            ninja --version
+            cat >/tmp/main.cpp <<EOF
+            #include <iostream>
+            int main(){ std::cout << "ok\n"; }
+            EOF
+            c++ -std=c++20 -O2 -stdlib=libc++ -rtlib=compiler-rt -lunwind /tmp/main.cpp -o /tmp/a.out
+            mkdir -p /tmp/smoke && cd /tmp/smoke
+            cat >CMakeLists.txt <<EOF
+            cmake_minimum_required(VERSION 3.20)
+            project(smoke LANGUAGES CXX)
+            add_executable(smoke main.cpp)
+            target_compile_features(smoke PRIVATE cxx_std_20)
+            target_compile_options(smoke PRIVATE -stdlib=libc++)
+            target_link_options(smoke PRIVATE -stdlib=libc++ -rtlib=compiler-rt -lunwind)
+            EOF
+            cp /tmp/main.cpp main.cpp
+            cmake -S . -B build -G Ninja
+            cmake --build build -v
+          '
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=clang-${{ env.CLANG_VER }}-libcxx
+            type=sha,format=short,prefix=clang-${{ env.CLANG_VER }}-libcxx-
+
+      - name: Build & push (multi-arch)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile.base
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            COMPILER_TYPE=clang
+            COMPILER_VERSION=${{ env.CLANG_XPACK }}
+            USE_LIBCXX=1
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  clang:
+    name: clang ${{ env.CLANG_VER }} - amd64
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build (amd64) and load locally
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile.base
+          platforms: linux/amd64
+          load: true
+          tags: local/smoke:clang-${{ env.CLANG_VER }}-amd64
+          build-args: |
+            COMPILER_TYPE=clang
+            COMPILER_VERSION=${{ env.CLANG_XPACK }}
+            USE_LIBCXX=0
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke test (amd64)
+        run: |
+          docker run --rm --platform=linux/amd64 local/smoke:clang-${{ env.CLANG_VER }}-amd64 bash -lc '
+            set -euxo pipefail
+            cc --version
+            c++ --version
+            cmake --version
+            ninja --version
+            cat >/tmp/main.cpp <<EOF
+            #include <iostream>
+            int main(){ std::cout << "ok\n"; }
+            EOF
+            c++ -std=c++20 -O2 /tmp/main.cpp -o /tmp/a.out
+            mkdir -p /tmp/smoke && cd /tmp/smoke
+            cat >CMakeLists.txt <<EOF
+            cmake_minimum_required(VERSION 3.20)
+            project(smoke LANGUAGES CXX)
+            add_executable(smoke main.cpp)
+            target_compile_features(smoke PRIVATE cxx_std_20)
+            EOF
+            cp /tmp/main.cpp main.cpp
+            cmake -S . -B build -G Ninja
+            cmake --build build -v
+          '
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=clang-${{ env.CLANG_VER }}
+            type=sha,format=short,prefix=clang-${{ env.CLANG_VER }}-
+
+      - name: Build & push (amd64)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile.base
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            COMPILER_TYPE=clang
+            COMPILER_VERSION=${{ env.CLANG_XPACK }}
+            USE_LIBCXX=0
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  gcc:
+    name: gcc ${{ env.GCC_VER }} - amd64
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build (amd64) and load locally
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile.base
+          platforms: linux/amd64
+          load: true
+          tags: local/smoke:gcc-${{ env.GCC_VER }}-amd64
+          build-args: |
+            COMPILER_TYPE=gcc
+            COMPILER_VERSION=${{ env.GCC_XPACK }}
+            USE_LIBCXX=0
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke test (amd64)
+        run: |
+          docker run --rm --platform=linux/amd64 local/smoke:gcc-${{ env.GCC_VER }}-amd64 bash -lc '
+            set -euxo pipefail
+            cc --version
+            c++ --version
+            cmake --version
+            ninja --version
+            cat >/tmp/main.cpp <<EOF
+            #include <iostream>
+            int main(){ std::cout << "ok\n"; }
+            EOF
+            c++ -std=c++20 -O2 /tmp/main.cpp -o /tmp/a.out
+            mkdir -p /tmp/smoke && cd /tmp/smoke
+            cat >CMakeLists.txt <<EOF
+            cmake_minimum_required(VERSION 3.20)
+            project(smoke LANGUAGES CXX)
+            add_executable(smoke main.cpp)
+            target_compile_features(smoke PRIVATE cxx_std_20)
+            EOF
+            cp /tmp/main.cpp main.cpp
+            cmake -S . -B build -G Ninja
+            cmake --build build -v
+          '
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=gcc-${{ env.GCC_VER }}
+            type=sha,format=short,prefix=gcc-${{ env.GCC_VER }}-
+
+      - name: Build & push (amd64)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile.base
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            COMPILER_TYPE=gcc
+            COMPILER_VERSION=${{ env.GCC_XPACK }}
+            USE_LIBCXX=0
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
