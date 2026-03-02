@@ -1,0 +1,160 @@
+# syntax=docker/dockerfile:1.5
+FROM ubuntu:20.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+SHELL ["/bin/bash", "-euxo", "pipefail", "-c"]
+
+# ------------------------------------------------------------
+# Primary knobs
+# ------------------------------------------------------------
+ARG COMPILER_TYPE=clang          # clang | gcc
+ARG COMPILER_VERSION=18.1.8-1    # xPack version string (e.g. 18.1.8-1, 14.3.0-1)
+ARG USE_LIBCXX=0                # 0/1 (clang-only)
+
+# ------------------------------------------------------------
+# Versioned build tools (prebuilt)
+# Convention: 0 => don't install; otherwise install that exact xPack version
+# ------------------------------------------------------------
+ARG INSTALL_CMAKE=3.31.9-1       # or 0
+ARG INSTALL_NINJA=1.13.1-1       # or 0
+
+# ------------------------------------------------------------
+# 3rd party libs (apt)
+# Convention: 0 => skip; 1 => install (latest from apt); else => apt-pin to version string
+# Defaults: everything installed by default
+# ------------------------------------------------------------
+ARG INSTALL_BOOST=1
+ARG INSTALL_GTEST=1
+ARG INSTALL_BENCHMARK=1
+ARG INSTALL_CLI11=1
+
+# ------------------------------------------------------------
+# Base deps
+# ------------------------------------------------------------
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates curl wget git \
+    gpg gpg-agent dirmngr \
+    lsb-release \
+    build-essential pkg-config \
+    unzip xz-utils \
+  && rm -rf /var/lib/apt/lists/*
+
+# ------------------------------------------------------------
+# Helpers
+# ------------------------------------------------------------
+RUN cat >/usr/local/bin/install_xpack <<'EOF' && chmod +x /usr/local/bin/install_xpack
+#!/usr/bin/env bash
+set -euo pipefail
+
+# install_xpack <repo> <tag_version> <basename_prefix> <install_dir>
+# Example:
+#   install_xpack xpack-dev-tools/clang-xpack 18.1.8-1 xpack-clang /opt/xpacks/clang
+repo="$1"
+ver="$2"
+prefix="$3"
+dest="$4"
+
+arch="$(dpkg --print-architecture)"
+case "${arch}" in
+  amd64) plat="linux-x64" ;;
+  arm64) plat="linux-arm64" ;;
+  *) echo "Unsupported arch: ${arch}"; exit 1 ;;
+esac
+
+# Asset naming convention used by xPack repos:
+#   <prefix>-<ver>-<plat>.tar.gz
+# e.g. xpack-clang-18.1.8-1-linux-x64.tar.gz
+asset="${prefix}-${ver}-${plat}.tar.gz"
+url="https://github.com/${repo}/releases/download/v${ver}/${asset}"
+
+tmp="$(mktemp -d)"
+curl -fsSL -o "${tmp}/${asset}" "${url}"
+mkdir -p "${dest}"
+tar -xzf "${tmp}/${asset}" -C "${dest}" --strip-components=1
+rm -rf "${tmp}"
+EOF
+
+RUN cat >/usr/local/bin/install_apt_pkg <<'EOF' && chmod +x /usr/local/bin/install_apt_pkg
+#!/usr/bin/env bash
+set -euo pipefail
+pkg="$1"
+want="$2"
+if [[ "$want" == "0" ]]; then
+  exit 0
+elif [[ "$want" == "1" ]]; then
+  apt-get install -y --no-install-recommends "$pkg"
+else
+  apt-get install -y --no-install-recommends "${pkg}=${want}"
+fi
+EOF
+
+# ------------------------------------------------------------
+# Install compiler toolchain (prebuilt xPack)
+# ------------------------------------------------------------
+RUN if [[ "${COMPILER_TYPE}" == "clang" ]]; then \
+      install_xpack xpack-dev-tools/clang-xpack "${COMPILER_VERSION}" xpack-clang /opt/toolchains/clang ; \
+    elif [[ "${COMPILER_TYPE}" == "gcc" ]]; then \
+      install_xpack xpack-dev-tools/gcc-xpack "${COMPILER_VERSION}" xpack-gcc /opt/toolchains/gcc ; \
+    else \
+      echo "Invalid COMPILER_TYPE=${COMPILER_TYPE} (expected clang or gcc)"; exit 1; \
+    fi
+
+ENV PATH="/opt/toolchains/clang/bin:/opt/toolchains/gcc/bin:${PATH}"
+
+# ------------------------------------------------------------
+# Install CMake / Ninja (prebuilt xPack)
+# ------------------------------------------------------------
+RUN if [[ "${INSTALL_CMAKE}" != "0" ]]; then \
+      install_xpack xpack-dev-tools/cmake-xpack "${INSTALL_CMAKE}" xpack-cmake /opt/tools/cmake ; \
+      ln -sf /opt/tools/cmake/bin/cmake /usr/local/bin/cmake ; \
+      ln -sf /opt/tools/cmake/bin/ctest /usr/local/bin/ctest || true ; \
+      ln -sf /opt/tools/cmake/bin/cpack /usr/local/bin/cpack || true ; \
+    fi && \
+    if [[ "${INSTALL_NINJA}" != "0" ]]; then \
+      install_xpack xpack-dev-tools/ninja-build-xpack "${INSTALL_NINJA}" xpack-ninja-build /opt/tools/ninja ; \
+      ln -sf /opt/tools/ninja/bin/ninja /usr/local/bin/ninja ; \
+    fi
+
+# ------------------------------------------------------------
+# Install 3rd party libs (apt)
+# ------------------------------------------------------------
+RUN apt-get update && \
+    /usr/local/bin/install_apt_pkg libboost-all-dev "${INSTALL_BOOST}" && \
+    /usr/local/bin/install_apt_pkg libgtest-dev     "${INSTALL_GTEST}" && \
+    /usr/local/bin/install_apt_pkg libbenchmark-dev "${INSTALL_BENCHMARK}" && \
+    /usr/local/bin/install_apt_pkg cli11-dev        "${INSTALL_CLI11}" && \
+    rm -rf /var/lib/apt/lists/*
+
+# ------------------------------------------------------------
+# Configure defaults (cc/c++ + optional libc++)
+# ------------------------------------------------------------
+RUN if [[ "${COMPILER_TYPE}" == "clang" ]]; then \
+      ln -sf /opt/toolchains/clang/bin/clang /usr/local/bin/cc && \
+      ln -sf /opt/toolchains/clang/bin/clang++ /usr/local/bin/c++ ; \
+    else \
+      ln -sf /opt/toolchains/gcc/bin/gcc /usr/local/bin/cc && \
+      ln -sf /opt/toolchains/gcc/bin/g++ /usr/local/bin/c++ ; \
+    fi
+
+ENV CC=cc \
+    CXX=c++
+
+# If USE_LIBCXX=1, provide a CMake toolchain snippet + environment defaults.
+RUN if [[ "${COMPILER_TYPE}" == "clang" && "${USE_LIBCXX}" == "1" ]]; then \
+      mkdir -p /opt/toolchains && \
+      cat >/opt/toolchains/clang-libcxx.cmake <<'TC' \
+set(CMAKE_C_COMPILER clang) \
+set(CMAKE_CXX_COMPILER clang++) \
+set(CMAKE_CXX_FLAGS_INIT "-stdlib=libc++") \
+set(CMAKE_EXE_LINKER_FLAGS_INIT "-stdlib=libc++") \
+TC \
+      && \
+      cat >/etc/profile.d/libcxx.sh <<'SH' \
+export CXXFLAGS="${CXXFLAGS:-} -stdlib=libc++" \
+export LDFLAGS="${LDFLAGS:-} -stdlib=libc++" \
+SH \
+      ; \
+    fi
+
+WORKDIR /work
+CMD ["/bin/bash"]
