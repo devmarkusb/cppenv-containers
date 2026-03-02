@@ -124,7 +124,6 @@ RUN apt-get update && \
     /usr/local/bin/install_apt_pkg libboost-all-dev "${INSTALL_BOOST}" && \
     /usr/local/bin/install_apt_pkg libgtest-dev     "${INSTALL_GTEST}" && \
     /usr/local/bin/install_apt_pkg libbenchmark-dev "${INSTALL_BENCHMARK}" && \
-    /usr/local/bin/install_apt_pkg cli11-dev        "${INSTALL_CLI11}" && \
     rm -rf /var/lib/apt/lists/*
 
 # ------------------------------------------------------------
